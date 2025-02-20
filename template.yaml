@@ -1,0 +1,190 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  AWS basic infrastructure with VPC, public and private subnets, S3 bucket, security group, EC2 instance, and IAM roles.
+
+Parameters:
+  pVPCName:
+    Type: String
+    Default: VPC
+  
+  pPublicSubnetName:
+    Type: String
+    Default: PublicSubnet
+  
+  pPrivateSubnetName:
+    Type: String
+    Default: PrivateSubnet
+  
+  pInternetGatewayName:
+    Type: String
+    Default: InternetGateway
+  
+  pRouteTableName:
+    Type: String
+    Default: PublicRouteTable
+  
+  pSecurityGroupName:
+    Type: String
+    Default: SecurityGroup
+  
+  pBucketName:
+    Type: String
+    Default: unique-bucket
+  
+  pEC2InstanceName:
+    Type: String
+    Default: EC2Instance
+  
+  pUbuntuVersion:
+    Type: String
+    Default: '24.04'
+    AllowedValues: ['16.04', '18.04', '20.04', '22.04', '24.04']
+    Description: Ubuntu version for EC2 instance.
+  
+  pArchitecture:
+    Type: String
+    Default: 'x86_64'
+    AllowedValues: ['x86_64', 'arm64']
+    Description: EC2 instance architecture.
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: { "Ref": "pVPCName" }
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: { "Ref": "VPC" }
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: { "Fn::Select": [ 0, { "Fn::GetAZs": "" } ] }
+      Tags:
+        - Key: Name
+          Value: { "Ref": "pPublicSubnetName" }
+
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: { "Ref": "VPC" }
+      CidrBlock: 10.0.2.0/24
+      MapPublicIpOnLaunch: false
+      AvailabilityZone: { "Fn::Select": [ 0, { "Fn::GetAZs": "" } ] }
+      Tags:
+        - Key: Name
+          Value: { "Ref": "pPrivateSubnetName" }
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: { "Ref": "pInternetGatewayName" }
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: { "Ref": "VPC" }
+      InternetGatewayId: { "Ref": "InternetGateway" }
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: { "Ref": "VPC" }
+      Tags:
+        - Key: Name
+          Value: { "Ref": "pRouteTableName" }
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: { "Ref": "PublicRouteTable" }
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: { "Ref": "InternetGateway" }
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: { "Ref": "PublicSubnet" }
+      RouteTableId: { "Ref": "PublicRouteTable" }
+
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: { "Fn::Sub": "${pBucketName}-${AWS::AccountId}" }
+      VersioningConfiguration:
+        Status: Enabled
+
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP traffic
+      VpcId: { "Ref": "VPC" }
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          FromPort: 0
+          ToPort: 0
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: { "Ref": "pSecurityGroupName" }
+
+  IAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [ "ec2.amazonaws.com" ]
+            Action: [ "sts:AssumeRole" ]
+      Policies:
+        - PolicyName: S3FullAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: "s3:*"
+                Resource: "*"
+      Tags:
+        - Key: Name
+          Value: EC2IAMRole
+
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t2.micro
+      ImageId: ami-0cb91c7de36eed2cb  # AMI - UCanonical, Ubuntu, 24.04, amd64 noble image
+      SubnetId: { "Ref": "PublicSubnet" }
+      SecurityGroupIds:
+        - { "Ref": "SecurityGroup" }
+      IamInstanceProfile: { "Ref": "IAMRole" }
+      Tags:
+        - Key: Name
+          Value: { "Ref": "pEC2InstanceName" }
+
+Outputs:
+  InstanceId:
+    Description: "EC2 instance id"
+    Value: { "Fn::Sub": "${EC2Instance}" }
+
+  PublicIP:
+    Description: "EC2 instance public ip"
+    Value: { "Fn::GetAtt": [ "EC2Instance", "PublicIp" ] }
+
+  S3BucketName:
+    Description: "S3 Bucket name"
+    Value: { "Fn::Sub": "${S3Bucket}" }
